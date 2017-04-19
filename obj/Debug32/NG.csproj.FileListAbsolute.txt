@@ -1,0 +1,14 @@
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG.csprojResolveAssemblyReference.cache
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\Panel.g.cs
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG_MarkupCompile.cache
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG_MarkupCompile.lref
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\bin\NG.dll
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\bin\NG.pdb
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\bin\RhinoWindows.dll
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\Panel.baml
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG.g.resources
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG.dll
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG.pdb
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG.Properties.Resources.resources
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\NG.csproj.GenerateResource.Cache
+C:\Users\user\Documents\Visual Studio 2015\Projects\NG\NG\obj\Debug32\GeneratedInternalTypeHelper.g.cs
