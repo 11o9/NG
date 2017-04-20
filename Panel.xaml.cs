@@ -438,13 +438,16 @@ namespace NG
 
 
             List<Curve> parkingLinesCollection = new List<Curve>();
-
-            for (int p = 0; p < parkingBaseLine.Count; p++)
-            {
-                bool addfirst = p == 0 ? true : false;
-                List<Curve> parkingLines = ParkingPrediction.Calculate(linedistance, parkingBaseLine[p].ToNurbsCurve(), addfirst);
-                parkingLinesCollection.AddRange(parkingLines);
-            }
+            List<Curve> baseCurves = parkingBaseLine.Select(n => n.ToNurbsCurve() as Curve).ToList();
+            ParkingMaster master = new ParkingMaster(tempSelectedBoundary, baseCurves, linedistance);
+            int parkingCount = master.CalculateParkingScore();
+            parkingLinesCollection = master.parkingCells;
+            //for (int p = 0; p < parkingBaseLine.Count; p++)
+            //{
+            //    bool addfirst = p == 0 ? true : false;
+            //    List<Curve> parkingLines = ParkingPrediction.Calculate(linedistance, parkingBaseLine[p].ToNurbsCurve(), addfirst);
+            //    parkingLinesCollection.AddRange(parkingLines);
+            //}
             
             
             //주차는.?
@@ -460,7 +463,7 @@ namespace NG
             preview.reg = reg;
             preview.model1 = parkingLinesCollection;
             preview.model2 = temp2;
-            preview.value1 = linedistance;
+            preview.value1 = parkingCount;
             preview.value2 = far;
             Rhino.RhinoDoc.ActiveDoc.Views.ActiveView.Redraw();
         }

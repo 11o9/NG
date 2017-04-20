@@ -8,11 +8,246 @@ using Rhino.Geometry;
 
 namespace NG
 {
+    public class ParkingMaster
+    {
+        Curve Boundary;
+        List<Curve> aptLines;
+        double TotalLength;
+        public List<Curve> parkingCells;
+        public ParkingMaster(Curve boundary, List<Curve> aptLines, double Length)
+        {
+            Boundary = InnerLoop(boundary);
+            this.aptLines = aptLines;
+            TotalLength = Length;
+            //ParkingResult result = ParkingPrediction.Calculate()
+        }
+
+        public Curve InnerLoop(Curve boundary)
+        {
+            CurveOrientation ot = boundary.ClosedCurveOrientation(Plane.WorldXY);
+            double offsetDistance = 6;
+            var segments = boundary.DuplicateSegments();
+            
+
+            for (int i = 0; i < segments.Length; i++)
+            {
+                Vector3d v = segments[i].TangentAtStart;
+                v.Rotate(-Math.PI / 2, Vector3d.ZAxis);
+                Curve temp = segments[i].DuplicateCurve();
+                temp.Translate(v * offsetDistance);
+                segments[i] = temp;
+            }
+
+            List<Point3d> toPoly = new List<Point3d>();
+
+            for (int i = 0; i < segments.Length; i++)
+            {
+                int j = (i + 1) % segments.Length;
+                Line l1 = new Line(segments[i].PointAtStart, segments[i].PointAtEnd);
+                Line l2 = new Line(segments[j].PointAtStart, segments[j].PointAtEnd);
+                double p1;
+                double p2;
+                Rhino.Geometry.Intersect.Intersection.LineLine(l1, l2, out p1, out p2);
+                toPoly.Add(l1.PointAt(p1));
+            }
+
+            toPoly.Add(toPoly[0]);
+
+            Curve merged = new Polyline(toPoly).ToNurbsCurve();
+
+            var intersection = Rhino.Geometry.Intersect.Intersection.CurveSelf(merged, 0);
+
+            var parameters = intersection.Select(n => n.ParameterA).ToList();
+            parameters.AddRange(intersection.Select(n => n.ParameterB));
+
+            var spltd = merged.Split(parameters);
+            var joined = Regulation.NewJoin(spltd);
+
+            return joined.Where(n => n.ClosedCurveOrientation(Plane.WorldXY) == ot).ToList()[0];
+
+
+        }
+
+        public int CalculateParkingScore()
+        {
+            if (aptLines.Count == 0)
+                return 0;
+            Vector3d dir0 = aptLines[0].TangentAtStart;
+            List<Curve> origins = new List<Curve>(aptLines);
+            dir0.Rotate(-Math.PI / 2, Vector3d.ZAxis);
+            //List<Point3d> starts = x.Select(n => n.PointAtStart).ToList();
+            if (origins.Count > 0)
+            {
+                Curve temp = origins[0].DuplicateCurve();
+                temp.Translate(dir0 * TotalLength);
+                origins.Insert(0, temp);
+
+            }
+
+            var parkingResult = ParkingPrediction.Calculate(TotalLength);
+            List<Curve> result = new List<Curve>();
+            List<Curve> partitions = new List<Curve>();
+            for (int i = 0; i < origins.Count; i++)
+            {
+                result.AddRange(parkingResult.GetCurves(origins[i]));
+                partitions.AddRange(parkingResult.GetParkingLines(origins[i]));
+            }
+
+            var widths = parkingResult.widths();
+            var heights = parkingResult.heights();
+
+            var innerParkings = partitions.Where(n => IsInside(Boundary, n)).ToList();
+
+            string log = innerParkings.Count.ToString() + " / " + partitions.Count.ToString()
+              + " ( " + (double)innerParkings.Count / partitions.Count * 100 + " %)";
+
+            //to debug
+            parkingCells = innerParkings;
+
+            return innerParkings.Count;
+        }
+
+        public bool IsInside(Curve c, Curve d)
+        {
+            var endPoints = d.DuplicateSegments().Select(n => n.PointAtStart).ToList();
+
+            int outCount = 0;
+            for (int i = 0; i < endPoints.Count; i++)
+            {
+                if (c.Contains(endPoints[i]) == PointContainment.Outside)
+                    outCount++;
+            }
+
+            if (outCount > 0)
+                return false;
+            else
+                return true;
+
+        }
+    }
+    //단위 거리 분할 결과.
+    public class ParkingResult
+    {
+        PeterParkerCollection resultCollection;
+        public ParkingResult(PeterParkerCollection result)
+        {
+            resultCollection = result;
+        }
+
+        public List<Curve> GetCurves(Curve origin)
+        {
+            List<double> offsets = resultCollection.collection.Last().OffsetDistances();
+            List<Curve> results = new List<Curve>();
+            for (int i = 0; i < offsets.Count; i++)
+            {
+                Curve temp = origin.DuplicateCurve();
+                Vector3d v = temp.TangentAtStart;
+                v.Rotate(Math.PI / 2, Vector3d.ZAxis);
+                temp.Translate(v * offsets[i]);
+                results.Add(temp);
+            }
+
+            return results;
+        }
+
+        public List<Curve> GetParkingLines(Curve origin)
+        {
+            List<double> offsets = resultCollection.collection.Last().OffsetDistances();
+            List<double[]> widths = resultCollection.collection.Last().GetWidths();
+            List<double> heights = resultCollection.collection.Last().GetHeights();
+            List<Curve> results = new List<Curve>();
+
+            double originCurveRotation = Vector3d.VectorAngle(Vector3d.XAxis, origin.TangentAtEnd, Plane.WorldXY);
+
+            for (int i = 0; i < widths.Count; i++)
+            {
+                Parking parking = resultCollection.collection.Last().parkings[i];
+
+                //도로면 패스
+                if (widths[i][0] == 0)
+                    continue;
+
+                Curve temp = origin.DuplicateCurve();
+                Vector3d v = origin.TangentAtStart;
+                v.Rotate(Math.PI / 2, Vector3d.ZAxis);
+                temp.Translate(v * offsets[i]);
+                var divided = origin.DivideByLength(widths[i][1], true);
+
+                //하나도 안나오면 패스
+                if (divided == null)
+                    continue;
+
+                var partitions = divided.Select(n => new LineCurve(temp.PointAt(n), temp.PointAt(n) - v * heights[i])).ToList();
+
+                List<Curve> pLines = new List<Curve>();
+
+                for (int j = 0; j < partitions.Count; j++)
+                {
+                    List<Curve> lines = parking.DrawLine(partitions[j].PointAtStart).ToList();
+                    lines.ForEach(n => n.Transform(Transform.Rotation(originCurveRotation, Vector3d.ZAxis, partitions[j].PointAtStart)));
+                    pLines.AddRange(lines);
+                }
+
+                pLines.ForEach(n => results.Add(n));
+
+
+            }
+
+
+            return results;
+        }
+
+
+        public bool IsInside(Curve c, Curve d)
+        {
+            var endPoints = d.DuplicateSegments().Select(n => n.PointAtStart).ToList();
+
+            int outCount = 0;
+            for (int i = 0; i < endPoints.Count; i++)
+            {
+                if (c.Contains(endPoints[i]) == PointContainment.Outside)
+                    outCount++;
+            }
+
+            if (outCount > 0)
+                return false;
+            else
+                return true;
+
+        }
+
+
+        //test//
+        public List<string> widths()
+        {
+            List<string> result = new List<string>();
+            List<double[]> widths = resultCollection.collection.Last().GetWidths();
+            for (int i = 0; i < widths.Count; i++)
+            {
+                result.Add(widths[i][0].ToString() + " , " + widths[i][1].ToString());
+            }
+            return result;
+
+        }
+
+        public List<string> heights()
+        {
+            List<string> result = new List<string>();
+            List<double> heights = resultCollection.collection.Last().GetHeights();
+            for (int i = 0; i < heights.Count; i++)
+            {
+                result.Add(heights[i].ToString());
+            }
+            return result;
+
+        }
+    }
+
     public class ParkingPrediction
     {
-        public static List<Curve> Calculate(double initialLength, Curve initialCurve, bool additional)
+        public static ParkingResult Calculate(double initialLength/*, Curve initialCurve*/)
         {
-            PeterParker origin = new PeterParker(initialLength, initialCurve);
+            PeterParker origin = new PeterParker(initialLength/*, initialCurve*/);
             Queue<PeterParker> wait = new Queue<PeterParker>();
             PeterParkerCollection fit = new PeterParkerCollection();
             wait.Enqueue(origin);
@@ -44,71 +279,15 @@ namespace NG
                 }
             }
 
+            //
 
-            //get parking line test
+            fit.collection.ForEach(n => n.FillRoads());
+            var result = new ParkingResult(fit);
 
-            List<double> offsets = fit.collection.Last().OffsetDistances();
-
-            offsets.Insert(0, 0);
-            List<Curve> results = new List<Curve>();
-            //results.Add(initialCurve.DuplicateCurve());
-            for (int i = 0; i < offsets.Count; i++)
-            {
-                Curve temp = initialCurve.DuplicateCurve();
-                Vector3d v = temp.TangentAtStart;
-                v.Rotate(Math.PI / 2, Vector3d.ZAxis);
-                temp.Translate(v * (offsets[i]));
-                results.Add(temp);
-            }
-
-            if (additional)
-            {
-                for (int i = 0; i < offsets.Count; i++)
-                {
-                    Curve temp = initialCurve.DuplicateCurve();
-                    Vector3d v = temp.TangentAtStart;
-                    v.Rotate(Math.PI / 2, Vector3d.ZAxis);
-                    temp.Translate(v * (offsets[i] - initialLength));
-                    results.Add(temp);
-                }
-            }
-
-
-
-            List<Parking> fitParks = fit.collection.Last().parkings;
-            List<Curve> partitions = new List<Curve>();
-            int parkCount = 0;
-            for (int i = 0; i < results.Count-1; i++)
-            {
-                int j = (i + 1) % results.Count;
-
-                double tempLength = Math.Round(results[j].PointAtStart.DistanceTo(results[i].PointAtStart),3);
-                for (int f = 0; f < fitParks.Count; f++)
-                {
-                    if (tempLength == fitParks[f].height)
-                    {
-                        var divideByLength = results[j].DivideByLength(fitParks[f].widthOffset, true);
-                        Vector3d v = results[j].PointAtStart - results[i].PointAtStart;
-                        //v.Rotate(Math.PI / 2, Vector3d.ZAxis);
-                        for (int p = 0; p < divideByLength.Length; p++)
-                        {
-                            LineCurve partition = new LineCurve(new Line(results[i].PointAt(divideByLength[p]), v));
-                            partitions.Add(partition);
-                        }
-
-                        parkCount++;
-                        //if (parkCount > fitParks.Count - 1)
-                        //    break;
-
-                    }
-                }
-            }
-
-            results.AddRange(partitions);
-
-            return results;
+            return result;
         }
     }
+
     public class PeterParkerCollection
     {
         public List<PeterParker> collection;
@@ -143,6 +322,7 @@ namespace NG
             collection.Sort(comp);
         }
     }
+
     public enum ParkingType
     {
         P0Single,
@@ -153,8 +333,10 @@ namespace NG
         P60Double,
         P90Single,
         P90Double,
-        Max
+        Max,
+        Road
     }
+
     public class Parking
     {
         public double height;
@@ -162,8 +344,19 @@ namespace NG
         public double widthOffset;
         public double necessaryRoad;
         public bool isDouble;
+        public ParkingType type;
+        public Parking(double distance)
+        {
+            height = distance;
+            necessaryRoad = 0;
+            width = 0;
+            widthOffset = 0;
+            isDouble = false;
+            type = ParkingType.Road;
+        }
         public Parking(ParkingType type)
         {
+            this.type = type;
             switch (type)
             {
                 case ParkingType.P0Single:
@@ -218,7 +411,7 @@ namespace NG
 
                 case ParkingType.P60Double:
                     {
-                        height = 9.18;
+                        height = 9.810;
                         width = 4.492;
                         widthOffset = 2.656;
                         necessaryRoad = 4.5;
@@ -245,15 +438,104 @@ namespace NG
                         isDouble = true;
                         break;
                     }
-
             }
         }
-
-        public void GenerateParkingLines()
+        public List<Curve> DrawLine(Point3d origin)
         {
+            switch (type)
+            {
+                case ParkingType.P0Single:
+                    return DrawRect(origin, -1, false);
 
+
+                case ParkingType.P0Double:
+                    return DrawRect(origin, -1, true);
+
+
+                case ParkingType.P45Single:
+                    return DrawRect(origin, Math.PI / 2 - Math.PI / 4, false);
+
+
+                case ParkingType.P45Double:
+                    return DrawRect(origin, Math.PI / 2 - Math.PI / 4, true);
+
+
+                case ParkingType.P60Single:
+                    return DrawRect(origin, Math.PI / 2 - Math.PI / 3, false);
+
+
+                case ParkingType.P60Double:
+                    return DrawRect(origin, Math.PI / 2 - Math.PI / 3, true);
+
+
+                case ParkingType.P90Single:
+                    return DrawRect(origin, Math.PI / 2 - Math.PI / 2, false);
+
+
+                case ParkingType.P90Double:
+                    return DrawRect(origin, Math.PI / 2 - Math.PI / 2, true);
+            }
+            return null;
+        }
+
+        public List<Curve> DrawRect(Point3d origin, double rad, bool isdouble)
+        {
+            List<Curve> result = new List<Curve>();
+            //평행주차 시, [6,2]
+            if (rad == -1)
+            {
+                Polyline p = new Polyline(new Point3d[]{
+          origin,
+          origin - Vector3d.YAxis * 2,
+          origin - Vector3d.YAxis * 2 + Vector3d.XAxis * 6,
+          origin + Vector3d.XAxis * 6,
+          origin});
+
+                result.Add(p.ToNurbsCurve());
+
+                if (isdouble)
+                {
+                    Polyline p2 = new Polyline(new Point3d[]{
+            p[1],
+            p[1] - Vector3d.YAxis * 2,
+            p[1] - Vector3d.YAxis * 2 + Vector3d.XAxis * 6,
+            p[1] + Vector3d.XAxis * 6,
+            p[1]});
+
+                    result.Add(p2.ToNurbsCurve());
+                }
+            }
+            //나머지 [2.3,5]
+            else
+            {
+                Polyline p = new Polyline(new Point3d[]{
+          origin,
+          origin - Vector3d.YAxis * 5,
+          origin - Vector3d.YAxis * 5 + Vector3d.XAxis * 2.3,
+          origin + Vector3d.XAxis * 2.3,
+          origin});
+
+                if (isdouble)
+                {
+                    Polyline p2 = new Polyline(new Point3d[]{
+            p[1],
+            p[1] - Vector3d.YAxis * 5,
+            p[1] - Vector3d.YAxis * 5 + Vector3d.XAxis * 2.3,
+            p[1] + Vector3d.XAxis * 2.3,
+            p[1]});
+
+                    p2.Transform(Transform.Rotation(-rad, origin));
+                    result.Add(p2.ToNurbsCurve());
+                }
+                p.Transform(Transform.Rotation(-rad, origin));
+                result.Add(p.ToNurbsCurve());
+
+            }
+
+            return result;
         }
     }
+
     public class PeterParkerComparer : IComparer<PeterParker>
     {
         public int Compare(PeterParker a, PeterParker b)
@@ -263,17 +545,18 @@ namespace NG
         }
 
     }
+
     public class PeterParker
     {
         public List<Parking> parkings;
         public double totalLength;
-        public Curve baseCurve;
+        //public Curve baseCurve;
 
-        public PeterParker(double length, Curve baseCurve)
+        public PeterParker(double length/*, Curve baseCurve*/)
         {
             parkings = new List<Parking>();
             totalLength = length;
-            this.baseCurve = baseCurve.DuplicateCurve();
+            //this.baseCurve = baseCurve.DuplicateCurve();
         }
 
         public PeterParker(PeterParker parent, ParkingType type)
@@ -281,10 +564,35 @@ namespace NG
             parkings = new List<Parking>(parent.parkings);
             parkings.Add(new Parking(type));
             totalLength = parent.totalLength;
-            baseCurve = parent.baseCurve;
+            //baseCurve = parent.baseCurve;
         }
 
+        //call when fit
+        public void FillRoads()
+        {
 
+            List<int> inserts = new List<int>();
+            List<Parking> roads = new List<Parking>();
+
+
+            for (int i = 0; i < parkings.Count; i++)
+            {
+                int j = (i + 1) % parkings.Count;
+                double roadi = parkings[i].necessaryRoad;
+                double roadj = parkings[j].necessaryRoad;
+                double roadLonger = roadi > roadj ? roadi : roadj;
+
+                inserts.Add(i);
+                roads.Add(new Parking(roadLonger));
+            }
+
+            //음.... +1 해줘야 맞음
+            for (int i = inserts.Count - 1; i >= 0; i--)
+            {
+                parkings.Insert(inserts[i] + 1, roads[i]);
+            }
+        }
+        //zero - back
         public List<double> OffsetDistances()
         {
             List<double> Lengths = new List<double>();
@@ -293,17 +601,33 @@ namespace NG
 
             for (int i = 0; i < parkings.Count; i++)
             {
-                int j = (i + 1) % parkings.Count;
-                double roadi = parkings[i].necessaryRoad;
-                double roadj = parkings[j].necessaryRoad;
-                double roadLonger = roadi > roadj ? roadi : roadj;
                 sum += parkings[i].height;
-                Lengths.Add(sum);
-                sum += roadLonger;
                 Lengths.Add(sum);
             }
 
             return Lengths;
+        }
+
+        //front - back
+        public List<double> GetHeights()
+        {
+            List<double> Heights = new List<double>();
+            Heights = parkings.Select(n => n.height).ToList();
+            return Heights;
+        }
+        //left - right
+        public List<double[]> GetWidths()
+        {
+            List<double[]> Widths = new List<double[]>();
+
+            //double sum = 0;
+
+            for (int i = 0; i < parkings.Count; i++)
+            {
+                Widths.Add(new double[] { parkings[i].width, parkings[i].widthOffset });
+            }
+
+            return Widths;
         }
 
         public double LeftLength()
@@ -323,12 +647,13 @@ namespace NG
             return totalLength - Lengths.Sum();
         }
 
+        //카운트를 여기서?...
         public List<int> ParkingUnitCount()
         {
             List<int> Counts = new List<int>();
             for (int i = 0; i < parkings.Count; i++)
             {
-                double totalWidth = baseCurve.GetLength();
+                double totalWidth = 100;
                 int count = 0;
                 while (true)
                 {
